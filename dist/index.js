@@ -358,6 +358,84 @@ app.get("/api/favorites", async (req, res) => {
         });
     }
 });
+app.post("/api/contact-messages", async (req, res) => {
+    try {
+        const { name, email, subject, message, userEmail } = req.body;
+        if (!name || !email || !subject || !message) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide name, email, subject, and message",
+            });
+        }
+        const contactMessage = {
+            name,
+            email,
+            subject,
+            message,
+            userEmail: userEmail || email,
+            status: "Sent",
+            createdAt: new Date(),
+        };
+        const db = await connectDB();
+        const result = await db
+            .collection("contactMessages")
+            .insertOne(contactMessage);
+        res.status(201).json({
+            success: true,
+            message: "Message sent successfully",
+            data: {
+                id: result.insertedId.toString(),
+                ...contactMessage,
+            },
+        });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to send message",
+        });
+    }
+});
+app.get("/api/contact-messages", async (req, res) => {
+    try {
+        const userEmail = String(req.query.userEmail || "");
+        if (!userEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "User email is required",
+            });
+        }
+        const db = await connectDB();
+        const messages = await db
+            .collection("contactMessages")
+            .find({ userEmail })
+            .sort({ createdAt: -1 })
+            .toArray();
+        const formattedMessages = messages.map((message) => ({
+            id: message._id.toString(),
+            name: message.name,
+            email: message.email,
+            subject: message.subject,
+            message: message.message,
+            userEmail: message.userEmail,
+            status: message.status,
+            createdAt: message.createdAt,
+        }));
+        res.json({
+            success: true,
+            message: "Messages fetched successfully",
+            data: formattedMessages,
+        });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch messages",
+        });
+    }
+});
 app.delete("/api/books/:id", async (req, res) => {
     try {
         const id = String(req.params.id);
