@@ -17,12 +17,26 @@ if (!process.env.MONGODB_URI) {
 
 const app = express();
 const port = Number(process.env.PORT) || 5000;
-const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+const clientUrls = [
+  process.env.CLIENT_URL || "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+  "http://127.0.0.1:3002",
+];
 const mongoUri = process.env.MONGODB_URI;
 
 app.use(
   cors({
-    origin: clientUrl,
+    origin: (origin, callback) => {
+      if (!origin || clientUrls.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   })
 );
