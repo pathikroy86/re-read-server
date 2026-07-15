@@ -275,6 +275,155 @@ app.get("/api/books/:id", async (req: Request, res: Response) => {
   }
 });
 
+app.post("/api/favorites", async (req: Request, res: Response) => {
+  try {
+    const { bookId, userEmail, userName } = req.body;
+
+    if (!bookId || !userEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Book id and user email are required",
+      });
+    }
+
+    if (!ObjectId.isValid(bookId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book id",
+      });
+    }
+
+    const db = await connectDB();
+    const book = await db.collection("books").findOne({
+      _id: new ObjectId(bookId),
+    });
+
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found",
+      });
+    }
+
+    const exists = await db.collection("favorites").findOne({
+      bookId,
+      userEmail,
+    });
+
+    if (exists) {
+      return res.json({
+        success: true,
+        message: "Book already saved to favorites",
+        data: {
+          id: exists._id.toString(),
+        },
+      });
+    }
+
+    const favorite = {
+      bookId,
+      userEmail,
+      userName: userName || "",
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection("favorites").insertOne(favorite);
+
+    res.status(201).json({
+      success: true,
+      message: "Book saved to favorites",
+      data: {
+        id: result.insertedId,
+        ...favorite,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to save favorite",
+    });
+  }
+});
+
+app.get("/api/favorites", async (req: Request, res: Response) => {
+  try {
+    const userEmail = String(req.query.userEmail || "");
+
+    if (!userEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "User email is required",
+      });
+    }
+
+    const db = await connectDB();
+    const favorites = await db
+      .collection("favorites")
+      .find({ userEmail })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const bookIds = favorites
+      .filter((favorite) => ObjectId.isValid(favorite.bookId))
+      .map((favorite) => new ObjectId(favorite.bookId));
+
+    const books = await db
+      .collection("books")
+      .find({ _id: { $in: bookIds } })
+      .toArray();
+
+    const formattedFavorites = favorites
+      .map((favorite) => {
+        const book = books.find(
+          (item) => item._id.toString() === favorite.bookId
+        );
+
+        if (!book) {
+          return null;
+        }
+
+        return {
+          id: favorite._id.toString(),
+          bookId: favorite.bookId,
+          userEmail: favorite.userEmail,
+          createdAt: favorite.createdAt,
+          book: {
+            id: book._id.toString(),
+            title: book.title,
+            author: book.author,
+            shortDescription: book.shortDescription,
+            fullDescription: book.fullDescription,
+            price: book.price,
+            genre: book.genre,
+            condition: book.condition,
+            location: book.location,
+            language: book.language,
+            edition: book.edition,
+            imageUrl: book.imageUrl,
+            ownerName: book.ownerName,
+            ownerEmail: book.ownerEmail,
+            status: book.status,
+            createdAt: book.createdAt,
+          },
+        };
+      })
+      .filter(Boolean);
+
+    res.json({
+      success: true,
+      message: "Favorites fetched successfully",
+      data: formattedFavorites,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch favorites",
+    });
+  }
+});
+
 app.delete("/api/books/:id", async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
