@@ -26,7 +26,7 @@ const clientUrls = [
     "http://127.0.0.1:3001",
     "http://127.0.0.1:3002",
 ];
-const mongoUri = process.env.MONGODB_URI;
+const mongoUri = getMongoUri();
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
         if (!origin || clientUrls.includes(origin)) {
@@ -39,6 +39,12 @@ app.use((0, cors_1.default)({
 }));
 app.use(express_1.default.json());
 let client = null;
+function getMongoUri() {
+    if (!process.env.MONGODB_URI) {
+        return "";
+    }
+    return process.env.MONGODB_URI.replace("@cluster0.exh2zgz.mongodb.net/?appName=Cluster0", "@ac-8wcx1qf-shard-00-00.exh2zgz.mongodb.net:27017,ac-8wcx1qf-shard-00-01.exh2zgz.mongodb.net:27017,ac-8wcx1qf-shard-00-02.exh2zgz.mongodb.net:27017/?ssl=true&authSource=admin&replicaSet=atlas-hpoy7r-shard-0&retryWrites=true&w=majority&appName=Cluster0").replace("mongodb+srv://", "mongodb://");
+}
 async function connectDB() {
     if (!mongoUri) {
         throw new Error("Please define MONGODB_URI in .env");
@@ -169,6 +175,56 @@ app.post("/api/books", async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to add book listing",
+        });
+    }
+});
+app.get("/api/books/:id", async (req, res) => {
+    try {
+        const id = String(req.params.id);
+        if (!mongodb_1.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid book id",
+            });
+        }
+        const db = await connectDB();
+        const book = await db.collection("books").findOne({
+            _id: new mongodb_1.ObjectId(id),
+        });
+        if (!book) {
+            return res.status(404).json({
+                success: false,
+                message: "Book not found",
+            });
+        }
+        res.json({
+            success: true,
+            message: "Book fetched successfully",
+            data: {
+                id: book._id.toString(),
+                title: book.title,
+                author: book.author,
+                shortDescription: book.shortDescription,
+                fullDescription: book.fullDescription,
+                price: book.price,
+                genre: book.genre,
+                condition: book.condition,
+                location: book.location,
+                language: book.language,
+                edition: book.edition,
+                imageUrl: book.imageUrl,
+                ownerName: book.ownerName,
+                ownerEmail: book.ownerEmail,
+                status: book.status,
+                createdAt: book.createdAt,
+            },
+        });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch book",
         });
     }
 });
