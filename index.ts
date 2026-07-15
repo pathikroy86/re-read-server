@@ -67,6 +67,8 @@ type TBook = {
   language: string;
   edition: string;
   imageUrl?: string;
+  rating?: number;
+  reviewCount?: number;
   ownerName?: string;
   ownerEmail?: string;
   status: string;
@@ -144,6 +146,8 @@ app.get("/api/books", async (_req: Request, res: Response) => {
       language: book.language,
       edition: book.edition,
       imageUrl: book.imageUrl,
+      rating: book.rating,
+      reviewCount: book.reviewCount,
       ownerName: book.ownerName,
       ownerEmail: book.ownerEmail,
       status: book.status,
@@ -205,6 +209,8 @@ app.post("/api/books", async (req: Request, res: Response) => {
       language: data.language || "English",
       edition: data.edition || "Paperback",
       imageUrl: data.imageUrl || "",
+      rating: Number(data.rating) || 0,
+      reviewCount: Number(data.reviewCount) || 0,
       ownerName: data.ownerName || "",
       ownerEmail: data.ownerEmail || "",
       status: "Active",
@@ -268,9 +274,11 @@ app.get("/api/books/:id", async (req: Request, res: Response) => {
         condition: book.condition,
         location: book.location,
         language: book.language,
-        edition: book.edition,
-        imageUrl: book.imageUrl,
-        ownerName: book.ownerName,
+      edition: book.edition,
+      imageUrl: book.imageUrl,
+      rating: book.rating,
+      reviewCount: book.reviewCount,
+      ownerName: book.ownerName,
         ownerEmail: book.ownerEmail,
         status: book.status,
         createdAt: book.createdAt,
@@ -411,6 +419,8 @@ app.get("/api/favorites", async (req: Request, res: Response) => {
             language: book.language,
             edition: book.edition,
             imageUrl: book.imageUrl,
+            rating: book.rating,
+            reviewCount: book.reviewCount,
             ownerName: book.ownerName,
             ownerEmail: book.ownerEmail,
             status: book.status,
