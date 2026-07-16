@@ -5,7 +5,9 @@ const fs = require("fs");
 const path = require("path");
 const { MongoClient } = require("mongodb");
 
-const envPath = path.join(__dirname, "../../re-read-client/.env");
+const envPath = fs.existsSync(path.join(__dirname, "../.env"))
+  ? path.join(__dirname, "../.env")
+  : path.join(__dirname, "../../re-read-client/.env");
 const env = Object.fromEntries(
   fs
     .readFileSync(envPath, "utf8")
@@ -339,12 +341,12 @@ const books = [
 ];
 
 async function seedBooks() {
-  const client = new MongoClient(env.MONGODB_URI, {
+  const client = new MongoClient(env.MONGODB_DIRECT_URI || env.MONGODB_URI, {
     serverSelectionTimeoutMS: 15000,
   });
   await client.connect();
 
-  const collection = client.db("ReRead").collection("books");
+  const collection = client.db(env.MONGODB_DB_NAME).collection("books");
   const now = new Date();
 
   const docs = books.map((book, index) => ({

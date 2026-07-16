@@ -2,7 +2,9 @@ const fs = require("fs");
 const path = require("path");
 const { MongoClient } = require("mongodb");
 
-const envPath = path.join(__dirname, "../../re-read-client/.env");
+const envPath = fs.existsSync(path.join(__dirname, "../.env"))
+  ? path.join(__dirname, "../.env")
+  : path.join(__dirname, "../../re-read-client/.env");
 const env = Object.fromEntries(
   fs
     .readFileSync(envPath, "utf8")
@@ -15,10 +17,7 @@ const env = Object.fromEntries(
 );
 
 function getMongoUri() {
-  return env.MONGODB_URI.replace(
-    "@cluster0.exh2zgz.mongodb.net/?appName=Cluster0",
-    "@ac-8wcx1qf-shard-00-00.exh2zgz.mongodb.net:27017,ac-8wcx1qf-shard-00-01.exh2zgz.mongodb.net:27017,ac-8wcx1qf-shard-00-02.exh2zgz.mongodb.net:27017/?ssl=true&authSource=admin&replicaSet=atlas-hpoy7r-shard-0&retryWrites=true&w=majority&appName=Cluster0"
-  ).replace("mongodb+srv://", "mongodb://");
+  return env.MONGODB_DIRECT_URI || env.MONGODB_URI;
 }
 
 const books = [
@@ -290,7 +289,7 @@ async function seedBooks() {
   });
   await client.connect();
 
-  const collection = client.db("ReRead").collection("books");
+  const collection = client.db(env.MONGODB_DB_NAME).collection("books");
   const now = new Date();
 
   const docs = books.map((book, index) => ({

@@ -18,15 +18,11 @@ if (!process.env.MONGODB_URI || !process.env.BETTER_AUTH_SECRET) {
     });
 }
 const app = (0, express_1.default)();
-const port = Number(process.env.PORT) || 5000;
-const clientUrls = [
-    process.env.CLIENT_URL || "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:3002",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    "http://127.0.0.1:3002",
-];
+const port = Number(process.env.PORT);
+const clientUrls = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
 const mongoUri = getMongoUri();
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
@@ -42,10 +38,13 @@ app.use(express_1.default.json());
 let client = null;
 const jwtSecret = process.env.JWT_SECRET || process.env.BETTER_AUTH_SECRET || "";
 function getMongoUri() {
-    if (!process.env.MONGODB_URI) {
-        return "";
+    return process.env.MONGODB_DIRECT_URI || process.env.MONGODB_URI || "";
+}
+function getMongoDbName() {
+    if (!process.env.MONGODB_DB_NAME) {
+        throw new Error("Please define MONGODB_DB_NAME in .env");
     }
-    return process.env.MONGODB_URI.replace("@cluster0.exh2zgz.mongodb.net/?appName=Cluster0", "@ac-8wcx1qf-shard-00-00.exh2zgz.mongodb.net:27017,ac-8wcx1qf-shard-00-01.exh2zgz.mongodb.net:27017,ac-8wcx1qf-shard-00-02.exh2zgz.mongodb.net:27017/?ssl=true&authSource=admin&replicaSet=atlas-hpoy7r-shard-0&retryWrites=true&w=majority&appName=Cluster0").replace("mongodb+srv://", "mongodb://");
+    return process.env.MONGODB_DB_NAME;
 }
 async function connectDB() {
     if (!mongoUri) {
@@ -55,7 +54,7 @@ async function connectDB() {
         client = new mongodb_1.MongoClient(mongoUri);
         await client.connect();
     }
-    return client.db("ReRead");
+    return client.db(getMongoDbName());
 }
 function getJwtSecret() {
     if (!jwtSecret) {
