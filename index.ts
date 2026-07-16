@@ -85,6 +85,28 @@ type TContactMessage = {
   createdAt: Date;
 };
 
+type TBlog = {
+  title: string;
+  bookTitle: string;
+  category: string;
+  coverImage?: string;
+  excerpt: string;
+  content: string;
+  authorName: string;
+  authorEmail: string;
+  readTime: string;
+  status: string;
+  createdAt: Date;
+};
+
+type TBlogComment = {
+  blogId: string;
+  comment: string;
+  userName: string;
+  userEmail: string;
+  createdAt: Date;
+};
+
 async function connectDB() {
   if (!mongoUri) {
     throw new Error("Please define MONGODB_URI in .env");
@@ -526,6 +548,233 @@ app.get("/api/contact-messages", async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch messages",
+    });
+  }
+});
+
+app.get("/api/blogs", async (_req: Request, res: Response) => {
+  try {
+    const db = await connectDB();
+    const blogs = await db
+      .collection("blogs")
+      .find({ status: "Published" })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const blogIds = blogs.map((blog) => blog._id.toString());
+    const comments = await db
+      .collection("blogComments")
+      .find({ blogId: { $in: blogIds } })
+      .toArray();
+
+    const formattedBlogs = blogs.map((blog) => ({
+      id: blog._id.toString(),
+      title: blog.title,
+      bookTitle: blog.bookTitle,
+      category: blog.category,
+      coverImage: blog.coverImage,
+      excerpt: blog.excerpt,
+      content: blog.content,
+      authorName: blog.authorName,
+      authorEmail: blog.authorEmail,
+      readTime: blog.readTime,
+      status: blog.status,
+      commentsCount: comments.filter(
+        (comment) => comment.blogId === blog._id.toString()
+      ).length,
+      createdAt: blog.createdAt,
+    }));
+
+    res.json({
+      success: true,
+      message: "Blogs fetched successfully",
+      data: formattedBlogs,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch blogs",
+    });
+  }
+});
+
+app.post("/api/blogs", async (req: Request, res: Response) => {
+  try {
+    const data = req.body;
+
+    if (
+      !data.title ||
+      !data.bookTitle ||
+      !data.category ||
+      !data.excerpt ||
+      !data.content ||
+      !data.authorName ||
+      !data.authorEmail
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide all required blog information",
+      });
+    }
+
+    const words = String(data.content).trim().split(/\s+/).length;
+    const readTime = `${Math.max(1, Math.ceil(words / 180))} min read`;
+
+    const blog: TBlog = {
+      title: data.title,
+      bookTitle: data.bookTitle,
+      category: data.category,
+      coverImage: data.coverImage || "",
+      excerpt: data.excerpt,
+      content: data.content,
+      authorName: data.authorName,
+      authorEmail: data.authorEmail,
+      readTime,
+      status: "Published",
+      createdAt: new Date(),
+    };
+
+    const db = await connectDB();
+    const result = await db.collection("blogs").insertOne(blog);
+
+    res.status(201).json({
+      success: true,
+      message: "Blog published successfully",
+      data: {
+        id: result.insertedId.toString(),
+        commentsCount: 0,
+        ...blog,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to publish blog",
+    });
+  }
+});
+
+app.get("/api/blogs/:id", async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid blog id",
+      });
+    }
+
+    const db = await connectDB();
+    const blog = await db.collection("blogs").findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        message: "Blog not found",
+      });
+    }
+
+    const comments = await db
+      .collection("blogComments")
+      .find({ blogId: id })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json({
+      success: true,
+      message: "Blog fetched successfully",
+      data: {
+        id: blog._id.toString(),
+        title: blog.title,
+        bookTitle: blog.bookTitle,
+        category: blog.category,
+        coverImage: blog.coverImage,
+        excerpt: blog.excerpt,
+        content: blog.content,
+        authorName: blog.authorName,
+        authorEmail: blog.authorEmail,
+        readTime: blog.readTime,
+        status: blog.status,
+        commentsCount: comments.length,
+        createdAt: blog.createdAt,
+        comments: comments.map((comment) => ({
+          id: comment._id.toString(),
+          blogId: comment.blogId,
+          comment: comment.comment,
+          userName: comment.userName,
+          userEmail: comment.userEmail,
+          createdAt: comment.createdAt,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch blog",
+    });
+  }
+});
+
+app.post("/api/blogs/:id/comments", async (req: Request, res: Response) => {
+  try {
+    const blogId = String(req.params.id);
+    const { comment, userName, userEmail } = req.body;
+
+    if (!ObjectId.isValid(blogId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid blog id",
+      });
+    }
+
+    if (!comment || !userName || !userEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Comment, user name, and email are required",
+      });
+    }
+
+    const db = await connectDB();
+    const blog = await db.collection("blogs").findOne({
+      _id: new ObjectId(blogId),
+    });
+
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        message: "Blog not found",
+      });
+    }
+
+    const newComment: TBlogComment = {
+      blogId,
+      comment,
+      userName,
+      userEmail,
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection("blogComments").insertOne(newComment);
+
+    res.status(201).json({
+      success: true,
+      message: "Comment added successfully",
+      data: {
+        id: result.insertedId.toString(),
+        ...newComment,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add comment",
     });
   }
 });
