@@ -2,7 +2,7 @@
   "name": "re-read-server",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "index.ts",
   "scripts": {
     "dev": "tsx watch index.ts",
     "build": "tsc",
@@ -25,6 +25,6 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.1.1",
     "tsx": "^4.23.1",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.3"
   }
 }
