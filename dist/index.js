@@ -6,12 +6,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const express_1 = __importDefault(require("express"));
+const jose_cjs_1 = require("jose-cjs");
 const mongodb_1 = require("mongodb");
 const node_dns_1 = __importDefault(require("node:dns"));
 const node_path_1 = __importDefault(require("node:path"));
 node_dns_1.default.setServers(["8.8.8.8", "8.8.4.4"]);
 dotenv_1.default.config();
-if (!process.env.MONGODB_URI) {
+if (!process.env.MONGODB_URI || !process.env.BETTER_AUTH_SECRET) {
     dotenv_1.default.config({
         path: node_path_1.default.join(process.cwd(), "../re-read-client/.env"),
     });
@@ -39,6 +40,7 @@ app.use((0, cors_1.default)({
 }));
 app.use(express_1.default.json());
 let client = null;
+const jwtSecret = process.env.JWT_SECRET || process.env.BETTER_AUTH_SECRET || "";
 function getMongoUri() {
     if (!process.env.MONGODB_URI) {
         return "";
@@ -54,6 +56,43 @@ async function connectDB() {
         await client.connect();
     }
     return client.db("ReRead");
+}
+function getJwtSecret() {
+    if (!jwtSecret) {
+        throw new Error("Please define JWT_SECRET or BETTER_AUTH_SECRET in .env");
+    }
+    return new TextEncoder().encode(jwtSecret);
+}
+async function verifyJwt(req, res, next) {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader?.startsWith("Bearer ")) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized request. JWT token is required.",
+            });
+        }
+        const token = authHeader.split(" ")[1];
+        const { payload } = await (0, jose_cjs_1.jwtVerify)(token, getJwtSecret());
+        if (!payload.email || !payload.name) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid JWT payload",
+            });
+        }
+        req.user = {
+            name: String(payload.name),
+            email: String(payload.email),
+        };
+        next();
+    }
+    catch (error) {
+        console.error(error);
+        return res.status(401).json({
+            success: false,
+            message: "Invalid or expired JWT token",
+        });
+    }
 }
 app.get("/", (_req, res) => {
     res.send("ReRead server is running");
@@ -121,7 +160,7 @@ app.get("/api/books", async (_req, res) => {
         });
     }
 });
-app.post("/api/books", async (req, res) => {
+app.post("/api/books", verifyJwt, async (req, res) => {
     try {
         const data = req.body;
         if (!data.title ||
@@ -158,8 +197,8 @@ app.post("/api/books", async (req, res) => {
             imageUrl: data.imageUrl || "",
             rating: Number(data.rating) || 0,
             reviewCount: Number(data.reviewCount) || 0,
-            ownerName: data.ownerName || "",
-            ownerEmail: data.ownerEmail || "",
+            ownerName: req.user?.name || "",
+            ownerEmail: req.user?.email || "",
             status: "Active",
             createdAt: new Date(),
         };
@@ -234,9 +273,11 @@ app.get("/api/books/:id", async (req, res) => {
         });
     }
 });
-app.post("/api/favorites", async (req, res) => {
+app.post("/api/favorites", verifyJwt, async (req, res) => {
     try {
-        const { bookId, userEmail, userName } = req.body;
+        const { bookId } = req.body;
+        const userEmail = req.user?.email || "";
+        const userName = req.user?.name || "";
         if (!bookId || !userEmail) {
             return res.status(400).json({
                 success: false,
@@ -275,7 +316,7 @@ app.post("/api/favorites", async (req, res) => {
         const favorite = {
             bookId,
             userEmail,
-            userName: userName || "",
+            userName,
             createdAt: new Date(),
         };
         const result = await db.collection("favorites").insertOne(favorite);
@@ -296,9 +337,9 @@ app.post("/api/favorites", async (req, res) => {
         });
     }
 });
-app.get("/api/favorites", async (req, res) => {
+app.get("/api/favorites", verifyJwt, async (req, res) => {
     try {
-        const userEmail = String(req.query.userEmail || "");
+        const userEmail = req.user?.email || "";
         if (!userEmail) {
             return res.status(400).json({
                 success: false,
@@ -366,9 +407,179 @@ app.get("/api/favorites", async (req, res) => {
         });
     }
 });
-app.post("/api/contact-messages", async (req, res) => {
+app.post("/api/cart", verifyJwt, async (req, res) => {
     try {
-        const { name, email, subject, message, userEmail } = req.body;
+        const { bookId } = req.body;
+        const userEmail = req.user?.email || "";
+        const userName = req.user?.name || "";
+        if (!bookId || !userEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Book id and user email are required",
+            });
+        }
+        if (!mongodb_1.ObjectId.isValid(bookId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid book id",
+            });
+        }
+        const db = await connectDB();
+        const book = await db.collection("books").findOne({
+            _id: new mongodb_1.ObjectId(bookId),
+        });
+        if (!book) {
+            return res.status(404).json({
+                success: false,
+                message: "Book not found",
+            });
+        }
+        const exists = await db.collection("cartItems").findOne({
+            bookId,
+            userEmail,
+        });
+        if (exists) {
+            return res.json({
+                success: true,
+                message: "Book already added to cart",
+                data: {
+                    id: exists._id.toString(),
+                },
+            });
+        }
+        const cartItem = {
+            bookId,
+            userEmail,
+            userName,
+            createdAt: new Date(),
+        };
+        const result = await db.collection("cartItems").insertOne(cartItem);
+        res.status(201).json({
+            success: true,
+            message: "Book added to cart",
+            data: {
+                id: result.insertedId.toString(),
+                ...cartItem,
+            },
+        });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to add book to cart",
+        });
+    }
+});
+app.get("/api/cart", verifyJwt, async (req, res) => {
+    try {
+        const userEmail = req.user?.email || "";
+        if (!userEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "User email is required",
+            });
+        }
+        const db = await connectDB();
+        const cartItems = await db
+            .collection("cartItems")
+            .find({ userEmail })
+            .sort({ createdAt: -1 })
+            .toArray();
+        const bookIds = cartItems
+            .filter((item) => mongodb_1.ObjectId.isValid(item.bookId))
+            .map((item) => new mongodb_1.ObjectId(item.bookId));
+        const books = await db
+            .collection("books")
+            .find({ _id: { $in: bookIds } })
+            .toArray();
+        const formattedCartItems = cartItems
+            .map((item) => {
+            const book = books.find((book) => book._id.toString() === item.bookId);
+            if (!book) {
+                return null;
+            }
+            return {
+                id: item._id.toString(),
+                bookId: item.bookId,
+                userEmail: item.userEmail,
+                createdAt: item.createdAt,
+                book: {
+                    id: book._id.toString(),
+                    title: book.title,
+                    author: book.author,
+                    shortDescription: book.shortDescription,
+                    fullDescription: book.fullDescription,
+                    price: book.price,
+                    genre: book.genre,
+                    condition: book.condition,
+                    location: book.location,
+                    language: book.language,
+                    edition: book.edition,
+                    imageUrl: book.imageUrl,
+                    rating: book.rating,
+                    reviewCount: book.reviewCount,
+                    ownerName: book.ownerName,
+                    ownerEmail: book.ownerEmail,
+                    status: book.status,
+                    createdAt: book.createdAt,
+                },
+            };
+        })
+            .filter(Boolean);
+        res.json({
+            success: true,
+            message: "Cart fetched successfully",
+            data: formattedCartItems,
+        });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch cart",
+        });
+    }
+});
+app.delete("/api/cart/:id", verifyJwt, async (req, res) => {
+    try {
+        const id = String(req.params.id);
+        if (!mongodb_1.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid cart item id",
+            });
+        }
+        const db = await connectDB();
+        const result = await db.collection("cartItems").deleteOne({
+            _id: new mongodb_1.ObjectId(id),
+            userEmail: req.user?.email,
+        });
+        if (!result.deletedCount) {
+            return res.status(404).json({
+                success: false,
+                message: "Cart item not found",
+            });
+        }
+        res.json({
+            success: true,
+            message: "Book removed from cart",
+        });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to remove cart item",
+        });
+    }
+});
+app.post("/api/contact-messages", verifyJwt, async (req, res) => {
+    try {
+        const { subject, message } = req.body;
+        const name = req.user?.name || "";
+        const email = req.user?.email || "";
+        const userEmail = req.user?.email || "";
         if (!name || !email || !subject || !message) {
             return res.status(400).json({
                 success: false,
@@ -380,7 +591,7 @@ app.post("/api/contact-messages", async (req, res) => {
             email,
             subject,
             message,
-            userEmail: userEmail || email,
+            userEmail,
             status: "Sent",
             createdAt: new Date(),
         };
@@ -405,9 +616,9 @@ app.post("/api/contact-messages", async (req, res) => {
         });
     }
 });
-app.get("/api/contact-messages", async (req, res) => {
+app.get("/api/contact-messages", verifyJwt, async (req, res) => {
     try {
-        const userEmail = String(req.query.userEmail || "");
+        const userEmail = req.user?.email || "";
         if (!userEmail) {
             return res.status(400).json({
                 success: false,
@@ -486,16 +697,14 @@ app.get("/api/blogs", async (_req, res) => {
         });
     }
 });
-app.post("/api/blogs", async (req, res) => {
+app.post("/api/blogs", verifyJwt, async (req, res) => {
     try {
         const data = req.body;
         if (!data.title ||
             !data.bookTitle ||
             !data.category ||
             !data.excerpt ||
-            !data.content ||
-            !data.authorName ||
-            !data.authorEmail) {
+            !data.content) {
             return res.status(400).json({
                 success: false,
                 message: "Please provide all required blog information",
@@ -510,8 +719,8 @@ app.post("/api/blogs", async (req, res) => {
             coverImage: data.coverImage || "",
             excerpt: data.excerpt,
             content: data.content,
-            authorName: data.authorName,
-            authorEmail: data.authorEmail,
+            authorName: req.user?.name || "",
+            authorEmail: req.user?.email || "",
             readTime,
             status: "Published",
             createdAt: new Date(),
@@ -596,10 +805,12 @@ app.get("/api/blogs/:id", async (req, res) => {
         });
     }
 });
-app.post("/api/blogs/:id/comments", async (req, res) => {
+app.post("/api/blogs/:id/comments", verifyJwt, async (req, res) => {
     try {
         const blogId = String(req.params.id);
-        const { comment, userName, userEmail } = req.body;
+        const { comment } = req.body;
+        const userName = req.user?.name || "";
+        const userEmail = req.user?.email || "";
         if (!mongodb_1.ObjectId.isValid(blogId)) {
             return res.status(400).json({
                 success: false,
@@ -647,7 +858,7 @@ app.post("/api/blogs/:id/comments", async (req, res) => {
         });
     }
 });
-app.delete("/api/books/:id", async (req, res) => {
+app.delete("/api/books/:id", verifyJwt, async (req, res) => {
     try {
         const id = String(req.params.id);
         if (!mongodb_1.ObjectId.isValid(id)) {
@@ -657,6 +868,21 @@ app.delete("/api/books/:id", async (req, res) => {
             });
         }
         const db = await connectDB();
+        const book = await db.collection("books").findOne({
+            _id: new mongodb_1.ObjectId(id),
+        });
+        if (!book) {
+            return res.status(404).json({
+                success: false,
+                message: "Book not found",
+            });
+        }
+        if (book.ownerEmail !== req.user?.email) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden. You can only delete your own book listings.",
+            });
+        }
         const result = await db.collection("books").deleteOne({
             _id: new mongodb_1.ObjectId(id),
         });

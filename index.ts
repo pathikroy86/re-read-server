@@ -1,6 +1,7 @@
 import cors from "cors";
 import dotenv from "dotenv";
 import express, { Request, Response } from "express";
+import { jwtVerify } from "jose-cjs";
 import { MongoClient, ObjectId } from "mongodb";
 import dns from "node:dns";
 import path from "node:path";
@@ -9,7 +10,7 @@ dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
 dotenv.config();
 
-if (!process.env.MONGODB_URI) {
+if (!process.env.MONGODB_URI || !process.env.BETTER_AUTH_SECRET) {
   dotenv.config({
     path: path.join(process.cwd(), "../re-read-client/.env"),
   });
@@ -43,6 +44,16 @@ app.use(
 app.use(express.json());
 
 let client: MongoClient | null = null;
+const jwtSecret = process.env.JWT_SECRET || process.env.BETTER_AUTH_SECRET || "";
+
+type TAuthUser = {
+  name: string;
+  email: string;
+};
+
+type TAuthRequest = Request & {
+  user?: TAuthUser;
+};
 
 function getMongoUri() {
   if (!process.env.MONGODB_URI) {
@@ -107,6 +118,13 @@ type TBlogComment = {
   createdAt: Date;
 };
 
+type TCartItem = {
+  bookId: string;
+  userEmail: string;
+  userName: string;
+  createdAt: Date;
+};
+
 async function connectDB() {
   if (!mongoUri) {
     throw new Error("Please define MONGODB_URI in .env");
@@ -118,6 +136,50 @@ async function connectDB() {
   }
 
   return client.db("ReRead");
+}
+
+function getJwtSecret() {
+  if (!jwtSecret) {
+    throw new Error("Please define JWT_SECRET or BETTER_AUTH_SECRET in .env");
+  }
+
+  return new TextEncoder().encode(jwtSecret);
+}
+
+async function verifyJwt(req: TAuthRequest, res: Response, next: () => void) {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized request. JWT token is required.",
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+    const { payload } = await jwtVerify(token, getJwtSecret());
+
+    if (!payload.email || !payload.name) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid JWT payload",
+      });
+    }
+
+    req.user = {
+      name: String(payload.name),
+      email: String(payload.email),
+    };
+
+    next();
+  } catch (error) {
+    console.error(error);
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired JWT token",
+    });
+  }
 }
 
 app.get("/", (_req: Request, res: Response) => {
@@ -190,7 +252,7 @@ app.get("/api/books", async (_req: Request, res: Response) => {
   }
 });
 
-app.post("/api/books", async (req: Request, res: Response) => {
+app.post("/api/books", verifyJwt, async (req: TAuthRequest, res: Response) => {
   try {
     const data = req.body;
 
@@ -233,8 +295,8 @@ app.post("/api/books", async (req: Request, res: Response) => {
       imageUrl: data.imageUrl || "",
       rating: Number(data.rating) || 0,
       reviewCount: Number(data.reviewCount) || 0,
-      ownerName: data.ownerName || "",
-      ownerEmail: data.ownerEmail || "",
+      ownerName: req.user?.name || "",
+      ownerEmail: req.user?.email || "",
       status: "Active",
       createdAt: new Date(),
     };
@@ -315,9 +377,14 @@ app.get("/api/books/:id", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/favorites", async (req: Request, res: Response) => {
+app.post(
+  "/api/favorites",
+  verifyJwt,
+  async (req: TAuthRequest, res: Response) => {
   try {
-    const { bookId, userEmail, userName } = req.body;
+    const { bookId } = req.body;
+    const userEmail = req.user?.email || "";
+    const userName = req.user?.name || "";
 
     if (!bookId || !userEmail) {
       return res.status(400).json({
@@ -363,7 +430,7 @@ app.post("/api/favorites", async (req: Request, res: Response) => {
     const favorite = {
       bookId,
       userEmail,
-      userName: userName || "",
+      userName,
       createdAt: new Date(),
     };
 
@@ -386,9 +453,12 @@ app.post("/api/favorites", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/api/favorites", async (req: Request, res: Response) => {
+app.get(
+  "/api/favorites",
+  verifyJwt,
+  async (req: TAuthRequest, res: Response) => {
   try {
-    const userEmail = String(req.query.userEmail || "");
+    const userEmail = req.user?.email || "";
 
     if (!userEmail) {
       return res.status(400).json({
@@ -466,9 +536,207 @@ app.get("/api/favorites", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/contact-messages", async (req: Request, res: Response) => {
+app.post("/api/cart", verifyJwt, async (req: TAuthRequest, res: Response) => {
   try {
-    const { name, email, subject, message, userEmail } = req.body;
+    const { bookId } = req.body;
+    const userEmail = req.user?.email || "";
+    const userName = req.user?.name || "";
+
+    if (!bookId || !userEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Book id and user email are required",
+      });
+    }
+
+    if (!ObjectId.isValid(bookId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book id",
+      });
+    }
+
+    const db = await connectDB();
+    const book = await db.collection("books").findOne({
+      _id: new ObjectId(bookId),
+    });
+
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found",
+      });
+    }
+
+    const exists = await db.collection("cartItems").findOne({
+      bookId,
+      userEmail,
+    });
+
+    if (exists) {
+      return res.json({
+        success: true,
+        message: "Book already added to cart",
+        data: {
+          id: exists._id.toString(),
+        },
+      });
+    }
+
+    const cartItem: TCartItem = {
+      bookId,
+      userEmail,
+      userName,
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection("cartItems").insertOne(cartItem);
+
+    res.status(201).json({
+      success: true,
+      message: "Book added to cart",
+      data: {
+        id: result.insertedId.toString(),
+        ...cartItem,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add book to cart",
+    });
+  }
+});
+
+app.get("/api/cart", verifyJwt, async (req: TAuthRequest, res: Response) => {
+  try {
+    const userEmail = req.user?.email || "";
+
+    if (!userEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "User email is required",
+      });
+    }
+
+    const db = await connectDB();
+    const cartItems = await db
+      .collection("cartItems")
+      .find({ userEmail })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const bookIds = cartItems
+      .filter((item) => ObjectId.isValid(item.bookId))
+      .map((item) => new ObjectId(item.bookId));
+
+    const books = await db
+      .collection("books")
+      .find({ _id: { $in: bookIds } })
+      .toArray();
+
+    const formattedCartItems = cartItems
+      .map((item) => {
+        const book = books.find((book) => book._id.toString() === item.bookId);
+
+        if (!book) {
+          return null;
+        }
+
+        return {
+          id: item._id.toString(),
+          bookId: item.bookId,
+          userEmail: item.userEmail,
+          createdAt: item.createdAt,
+          book: {
+            id: book._id.toString(),
+            title: book.title,
+            author: book.author,
+            shortDescription: book.shortDescription,
+            fullDescription: book.fullDescription,
+            price: book.price,
+            genre: book.genre,
+            condition: book.condition,
+            location: book.location,
+            language: book.language,
+            edition: book.edition,
+            imageUrl: book.imageUrl,
+            rating: book.rating,
+            reviewCount: book.reviewCount,
+            ownerName: book.ownerName,
+            ownerEmail: book.ownerEmail,
+            status: book.status,
+            createdAt: book.createdAt,
+          },
+        };
+      })
+      .filter(Boolean);
+
+    res.json({
+      success: true,
+      message: "Cart fetched successfully",
+      data: formattedCartItems,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch cart",
+    });
+  }
+});
+
+app.delete(
+  "/api/cart/:id",
+  verifyJwt,
+  async (req: TAuthRequest, res: Response) => {
+    try {
+      const id = String(req.params.id);
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid cart item id",
+        });
+      }
+
+      const db = await connectDB();
+      const result = await db.collection("cartItems").deleteOne({
+        _id: new ObjectId(id),
+        userEmail: req.user?.email,
+      });
+
+      if (!result.deletedCount) {
+        return res.status(404).json({
+          success: false,
+          message: "Cart item not found",
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Book removed from cart",
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to remove cart item",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/contact-messages",
+  verifyJwt,
+  async (req: TAuthRequest, res: Response) => {
+  try {
+    const { subject, message } = req.body;
+    const name = req.user?.name || "";
+    const email = req.user?.email || "";
+    const userEmail = req.user?.email || "";
 
     if (!name || !email || !subject || !message) {
       return res.status(400).json({
@@ -482,7 +750,7 @@ app.post("/api/contact-messages", async (req: Request, res: Response) => {
       email,
       subject,
       message,
-      userEmail: userEmail || email,
+      userEmail,
       status: "Sent",
       createdAt: new Date(),
     };
@@ -509,9 +777,12 @@ app.post("/api/contact-messages", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/api/contact-messages", async (req: Request, res: Response) => {
+app.get(
+  "/api/contact-messages",
+  verifyJwt,
+  async (req: TAuthRequest, res: Response) => {
   try {
-    const userEmail = String(req.query.userEmail || "");
+    const userEmail = req.user?.email || "";
 
     if (!userEmail) {
       return res.status(400).json({
@@ -599,7 +870,7 @@ app.get("/api/blogs", async (_req: Request, res: Response) => {
   }
 });
 
-app.post("/api/blogs", async (req: Request, res: Response) => {
+app.post("/api/blogs", verifyJwt, async (req: TAuthRequest, res: Response) => {
   try {
     const data = req.body;
 
@@ -608,9 +879,7 @@ app.post("/api/blogs", async (req: Request, res: Response) => {
       !data.bookTitle ||
       !data.category ||
       !data.excerpt ||
-      !data.content ||
-      !data.authorName ||
-      !data.authorEmail
+      !data.content
     ) {
       return res.status(400).json({
         success: false,
@@ -628,8 +897,8 @@ app.post("/api/blogs", async (req: Request, res: Response) => {
       coverImage: data.coverImage || "",
       excerpt: data.excerpt,
       content: data.content,
-      authorName: data.authorName,
-      authorEmail: data.authorEmail,
+      authorName: req.user?.name || "",
+      authorEmail: req.user?.email || "",
       readTime,
       status: "Published",
       createdAt: new Date(),
@@ -721,10 +990,15 @@ app.get("/api/blogs/:id", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/blogs/:id/comments", async (req: Request, res: Response) => {
+app.post(
+  "/api/blogs/:id/comments",
+  verifyJwt,
+  async (req: TAuthRequest, res: Response) => {
   try {
     const blogId = String(req.params.id);
-    const { comment, userName, userEmail } = req.body;
+    const { comment } = req.body;
+    const userName = req.user?.name || "";
+    const userEmail = req.user?.email || "";
 
     if (!ObjectId.isValid(blogId)) {
       return res.status(400).json({
@@ -779,7 +1053,10 @@ app.post("/api/blogs/:id/comments", async (req: Request, res: Response) => {
   }
 });
 
-app.delete("/api/books/:id", async (req: Request, res: Response) => {
+app.delete(
+  "/api/books/:id",
+  verifyJwt,
+  async (req: TAuthRequest, res: Response) => {
   try {
     const id = String(req.params.id);
 
@@ -791,6 +1068,24 @@ app.delete("/api/books/:id", async (req: Request, res: Response) => {
     }
 
     const db = await connectDB();
+    const book = await db.collection("books").findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found",
+      });
+    }
+
+    if (book.ownerEmail !== req.user?.email) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden. You can only delete your own book listings.",
+      });
+    }
+
     const result = await db.collection("books").deleteOne({
       _id: new ObjectId(id),
     });
