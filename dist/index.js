@@ -904,6 +904,9 @@ app.delete("/api/books/:id", verifyJwt, async (req, res) => {
         });
     }
 });
-app.listen(port, () => {
-    console.log(`ReRead server is running on port ${port}`);
-});
+if (process.env.VERCEL !== "1") {
+    app.listen(port, () => {
+        console.log(`ReRead server is running on port ${port}`);
+    });
+}
+exports.default = app;

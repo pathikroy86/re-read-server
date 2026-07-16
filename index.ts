@@ -1107,6 +1107,10 @@ app.delete(
   }
 });
 
-app.listen(port, () => {
-  console.log(`ReRead server is running on port ${port}`);
-});
+if (process.env.VERCEL !== "1") {
+  app.listen(port, () => {
+    console.log(`ReRead server is running on port ${port}`);
+  });
+}
+
+export default app;
